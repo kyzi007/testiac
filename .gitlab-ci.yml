@@ -1,0 +1,79 @@
+stages:
+  - playbook_prepare
+  - deploy
+  - check
+  - doc
+  - map
+  - notify
+  - notify_error
+
+variables:
+  ANSIBLE_LIBRARY: "/usr/local/lib/ansible-modules"
+  OPENSSL_CONF: "/etc/ssl/openssl.cnf"
+  LOG_DIR: "/data/logs/${CI_PIPELINE_ID}"
+  DUMP_PATH: "/data/logs/${CI_PIPELINE_ID}/dump.json"
+  LOG_PATH: "/data/logs/${CI_PIPELINE_ID}/${CI_BUILD_ID}-log.txt"
+  HELPERS: "/home/gitlab-runner/.ansible/helpers"
+  BUILD_DB: "/data/domains"
+  TMP_FOLDER: "/home/gitlab-runner/wiki_tmp"
+cache:
+  key: "$CI_PIPELINE_ID"
+  untracked: true
+  paths:
+    - .
+
+playbook_prepare_job:
+  stage: playbook_prepare
+  script:
+    - if [[ $(git log --stat --max-count 1 | grep "README.md") == *"README.md"* ]]; then exit 0; fi
+    - echo "create log dir ${LOG_DIR}"
+    - echo "create report dir ${TMP_FOLDER}"
+    - mkdir $LOG_DIR
+    - echo "update roles"
+    - git submodule update --init --recursive
+    - echo "create temp playbook"
+    - python ${HELPERS}/yml_diff.py --path $(pwd)
+
+deploy_job:
+  stage: deploy
+  script:
+    - if [[ $(git log --stat --max-count 1 | grep "README.md") == *"README.md"* ]]; then exit 0; fi
+    - ansible-playbook tmp.yml -i hosts -v -e "openssl_conf=${OPENSSL_CONF}" -e "dump_path=${DUMP_PATH}" | tee ${LOG_PATH}
+  only:
+  - master
+
+check_job:
+  stage: check
+  script:
+    - if [[ $(git log --stat --max-count 1 | grep "README.md") == *"README.md"* ]]; then exit 0; fi
+    - ansible-playbook tmp.yml -i hosts -v -e "openssl_conf=${OPENSSL_CONF}" -e "dump_path=${DUMP_PATH}" --check | tee ${LOG_PATH}
+  only:
+  - dev
+
+map_job:
+  stage: map
+  script:
+    - if [[ $(git log --stat --max-count 1 | grep "README.md") == *"README.md"* ]]; then exit 0; fi
+    - python /home/gitlab-runner/.ansible/helpers/export_wiki.py --path $TMP_FOLDER
+  only:
+  - master
+
+doc_job:
+  stage: doc
+  script:
+    - if [[ $(git log --stat --max-count 1 | grep "README.md") == *"README.md"* ]]; then exit 0; fi
+    - sh ${HELPERS}/readme.sh
+  only:
+  - dev
+
+notify_job:
+  stage: notify
+  script:
+    - if [[ $(git log --stat --max-count 1 | grep "README.md") == *"README.md"* ]]; then exit 0; fi
+    - python ${HELPERS}/notify.py --path $(pwd) --user_mail ${GITLAB_USER_EMAIL} --project ${CI_PROJECT_URL} --logdir ${LOG_DIR} --pipeline ${CI_PIPELINE_ID} --fail no
+
+notify_error_job:
+  stage: notify_error
+  script:
+  - python ${HELPERS}/notify.py --path $(pwd) --user_mail ${GITLAB_USER_EMAIL} --project ${CI_PROJECT_URL} --logdir ${LOG_DIR} --pipeline ${CI_PIPELINE_ID} --fail yes
+  when: on_failure
